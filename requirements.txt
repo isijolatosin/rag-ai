@@ -1,10 +1,13 @@
 fastapi
 uvicorn
-langchain
-langchain-chroma
 chromadb
 openai
 redis
 python-dotenv
 pypdf
 docx2txt
+langchain
+langchain-chroma
+langchain-community
+langchain_openai
+langchain_text_splitters
