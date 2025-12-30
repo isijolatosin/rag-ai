@@ -1,0 +1,19 @@
+{
+  "name": "RAG-AI",
+  "version": "1.0.0",
+  "main": "app.py",
+  "scripts": {
+    "start": "uvicorn app:app --reload --host 0.0.0.0 --port 8000"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "ioredis": "^5.8.2",
+    "openai": "^6.5.0",
+    "redis": "^5.10.0"
+  },
+  "type": "module"
+}
