@@ -12,6 +12,7 @@ langchain_chroma
 
 # OpenAI API
 openai
+langchain_openai
 
 # Redis for caching / token tracking
 redis
