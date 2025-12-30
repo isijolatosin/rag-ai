@@ -61,7 +61,7 @@ async def process_file(file: UploadFile = File(...)):
         # Run RAG pipeline
         documents = load_documents(documents_path=str(UPLOAD_DIR.resolve()))
         chunks = split_documents(documents)
-        vectorstore = create_vector_store(chunks)
+        create_vector_store(chunks)
 
         return JSONResponse(
             content={

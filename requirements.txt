@@ -1,13 +1,25 @@
+# FastAPI and server
 fastapi
 uvicorn
-chromadb
-openai
-redis
 python-dotenv
+python-multipart
+
+# RAG / LangChain / Chroma
+chromadb
+langchain
+langchain-community
+
+# OpenAI API
+openai
+
+# Redis for caching / token tracking
+redis
+aioredis
+
+# Document loaders
 pypdf
 docx2txt
-langchain
-langchain-chroma
-langchain-community
-langchain_openai
-langchain_text_splitters
+
+# Optional / dev tools
+black
+pytest
