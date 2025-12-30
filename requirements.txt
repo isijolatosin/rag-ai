@@ -8,6 +8,7 @@ python-multipart
 chromadb
 langchain
 langchain-community
+langchain_chroma
 
 # OpenAI API
 openai

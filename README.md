@@ -130,6 +130,7 @@ data: [DONE]
 - Forward SSE stream to frontend
   Node uploads files → Python processes → Python streams AI output → Node forwards to client.
 
-# python3.11 -m venv venv
+#### TO INSTALL PACKAGES WITH ONE RUN
 
-# source venv/bin/activate
+- pip install -r requirements.txt
+- pip list - to verify
