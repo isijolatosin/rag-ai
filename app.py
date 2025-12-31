@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -35,6 +37,7 @@ executor = ThreadPoolExecutor(max_workers=1)
 
 # OpenAI setup
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
+model = ChatOpenAI(model="gpt-4o-mini")
 # Token & model limits
 DAILY_TOKEN_LIMIT = int(os.environ.get("DAILY_TOKEN_LIMIT"))
 MODEL_MAX_TOKENS = int(os.environ.get("MODEL_MAX_TOKENS"))
@@ -45,6 +48,8 @@ openai_client = OpenAI(api_key=OPENAI_KEY)
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "RAG" / "Documents"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+chat_history = []
 
 class QueryPayload(BaseModel):
     query: str
@@ -91,10 +96,24 @@ async def process_file(file: UploadFile = File(...)):
 ###### Streaming /process-query endpoint
 @app.post("/process-query")
 async def process_query(payload: QueryPayload, request: Request):
-    query = payload.query.strip()
-    
+    search_question = payload.query.strip()
+    query = search_question
+
     if not query:
         raise HTTPException(status_code=400, detail="Query is empty")
+
+    if chat_history:
+        # Ask AI to make the question standalone
+        messages = [
+            SystemMessage(content="Given the chat history, rewrite the new question to be standalone and searchable. Just return the rewritten question."),
+        ] + chat_history + [
+            HumanMessage(content=f"New question: {query}")
+        ]
+        
+        result = model.invoke(messages)
+        query = result.content.strip()
+    else:
+        query = search_question
 
     # Step 1: Retrieve RAG chunks
     relevant_docs = [d.page_content for d in retrieve_chunks(query)]
@@ -176,6 +195,9 @@ async def process_query(payload: QueryPayload, request: Request):
             # Cache partial response ONLY if not exceeded
             if stream_response and not token_limit_exceeded:
                 await set_cached_response(query, stream_response)
+                # Remember this conversation
+                chat_history.append(HumanMessage(content=query))
+                chat_history.append(AIMessage(content=stream_response))
 
             yield "data: [DONE]\n\n"
 
