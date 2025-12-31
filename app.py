@@ -1,11 +1,14 @@
 import asyncio
 import os
+import re
 import shutil
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel
@@ -21,12 +24,21 @@ from utilities.vector_store import create_vector_store
 load_dotenv()
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # use specific domains in production
+    allow_credentials=True,
+    allow_methods=["*"],  # includes OPTIONS
+    allow_headers=["*"],
+)
+executor = ThreadPoolExecutor(max_workers=1)
 
 # OpenAI setup
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY")
 # Token & model limits
 DAILY_TOKEN_LIMIT = int(os.environ.get("DAILY_TOKEN_LIMIT"))
 MODEL_MAX_TOKENS = int(os.environ.get("MODEL_MAX_TOKENS"))
+SAFE_FLUSH_RE = re.compile(r".*[\s\.\,\!\?\:\;\)\]\}\n]$")
 
 openai_client = OpenAI(api_key=OPENAI_KEY)
 
@@ -98,40 +110,73 @@ async def process_query(payload: QueryPayload, request: Request):
     used_today = int(await get_tokens_used_today(payload.user_id))
     prompt = get_rag_system_prompt(query, relevant_docs)
     estimated_input_tokens = int(estimate_tokens(prompt))
-    max_output_tokens = min((DAILY_TOKEN_LIMIT) - used_today - estimated_input_tokens, MODEL_MAX_TOKENS)
+    remaining_tokens = DAILY_TOKEN_LIMIT - used_today - estimated_input_tokens
+    max_output_tokens = min(remaining_tokens, MODEL_MAX_TOKENS)
 
-    if DAILY_TOKEN_LIMIT - used_today <= 0 or max_output_tokens < 50:
+    if remaining_tokens <= 0 or max_output_tokens < 50:
         raise HTTPException(status_code=429, detail="Not enough tokens left for a response")
 
     # Step 4: Generate completion (streaming)
     async def event_stream():
+        loop = asyncio.get_running_loop()
         stream_response = ""
+        buffer = ""
+        tokens_used_in_stream = 0
+        token_limit_exceeded = False
 
-        try:
-            stream_manager = openai_client.responses.create(
+        def openai_stream():
+            return openai_client.responses.create(
                 model="gpt-4o-mini",
                 input=prompt,
                 stream=True,
                 max_output_tokens=max_output_tokens,
             )
-            for event in stream_manager:
-                # Keep-alive ping
-                yield ": ping\n\n"
 
-                if getattr(event, "type", None) == "response.output_text.delta":
-                    delta = getattr(event, "delta", None)
-                    if delta:
-                        stream_response += delta
-                        yield f"data: {delta}\n\n"
-                        # flush immediately
-                        await asyncio.sleep(0)  # yields control to event loop
+        try:
+            stream_manager = await loop.run_in_executor(executor, openai_stream)
+            for event in stream_manager:
+                if event.type != "response.output_text.delta":
+                    continue
+
+                delta = event.delta
+                if not delta:
+                    continue
+
+                # Estimate tokens for this chunk
+                estimated = estimate_tokens(delta)
+                tokens_used_in_stream += estimated
+
+                # 🚨 Enforce token limit DURING stream
+                if used_today + tokens_used_in_stream > DAILY_TOKEN_LIMIT:
+                    token_limit_exceeded = True
+                    yield "data: [TOKEN_LIMIT_EXCEEDED]\n\n"
+                    break
+
+                buffer += delta
+                stream_response += delta
+
+                # Flush only when buffer ends cleanly
+                if SAFE_FLUSH_RE.match(buffer):
+                    yield f"data: {buffer}\n\n"
+                    buffer = ""
+
+                await asyncio.sleep(0)
+
+            # Flush anything remaining
+            if buffer and not token_limit_exceeded:
+                yield f"data: {buffer}\n\n"
 
         except Exception as e:
             yield f"data: [ERROR] {str(e)}\n\n"
         finally:
-            # Update tokens & cache after streaming
-            await add_tokens(payload.user_id, estimate_tokens(stream_response))
-            await set_cached_response(query, stream_response, )
+            # Only charge tokens that were actually streamed
+            if tokens_used_in_stream > 0:
+                await add_tokens(payload.user_id, tokens_used_in_stream)
+                
+            # Cache partial response ONLY if not exceeded
+            if stream_response and not token_limit_exceeded:
+                await set_cached_response(query, stream_response)
+
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={
